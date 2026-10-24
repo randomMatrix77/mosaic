@@ -1,0 +1,3 @@
+/Users/kronos/mosaic/native/android/app/.cxx/Debug/65b3y5b5/arm64-v8a/CMakeFiles/vibeos_mnn.dir
+/Users/kronos/mosaic/native/android/app/.cxx/Debug/65b3y5b5/arm64-v8a/CMakeFiles/edit_cache.dir
+/Users/kronos/mosaic/native/android/app/.cxx/Debug/65b3y5b5/arm64-v8a/CMakeFiles/rebuild_cache.dir

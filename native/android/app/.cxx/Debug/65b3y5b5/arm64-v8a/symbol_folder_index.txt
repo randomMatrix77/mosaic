@@ -1,0 +1,1 @@
+/Users/kronos/mosaic/native/android/app/build/intermediates/cxx/Debug/65b3y5b5/obj/arm64-v8a

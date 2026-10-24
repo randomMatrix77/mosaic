@@ -1,0 +1,10 @@
+.gradle/
+**/build/
+local.properties
+native/android/app/src/main/jniLibs/
+native/android/third_party/MNN/
+*.apk
+*.aab
+node_modules/
+dist/
+

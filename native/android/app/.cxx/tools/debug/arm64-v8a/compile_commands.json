@@ -1,0 +1,7 @@
+[
+{
+  "directory": "/Users/kronos/mosaic/native/android/app/.cxx/Debug/65b3y5b5/arm64-v8a",
+  "command": "/Users/kronos/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/bin/clang++ --target=aarch64-none-linux-android26 --sysroot=/Users/kronos/Library/Android/sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/darwin-x86_64/sysroot -Dvibeos_mnn_EXPORTS -I/private/var/folders/dd/kkv2pdg115b5bgz7_c3_zzb40000gn/T/mnn-official/include -I/private/var/folders/dd/kkv2pdg115b5bgz7_c3_zzb40000gn/T/mnn-official/transformers/llm/engine/include -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D__BIONIC_NO_PAGE_SIZE_MACRO -D_FORTIFY_SOURCE=2 -Wformat -Werror=format-security  -std=c++17 -fexceptions -frtti -fno-limit-debug-info  -fPIC -Wall -Wextra -Werror=return-type -o CMakeFiles/vibeos_mnn.dir/mnn_jni.cpp.o -c /Users/kronos/mosaic/native/android/app/src/main/cpp/mnn_jni.cpp",
+  "file": "/Users/kronos/mosaic/native/android/app/src/main/cpp/mnn_jni.cpp"
+}
+]
