@@ -1,0 +1,9 @@
+[submodule "app/src/main/cpp/llama.cpp"]
+	path = app/src/main/cpp/llama.cpp
+	url = https://github.com/ggml-org/llama.cpp.git
+[submodule "app/src/main/cpp/OpenCL-Headers"]
+	path = app/src/main/cpp/OpenCL-Headers
+	url = https://github.com/KhronosGroup/OpenCL-Headers.git
+[submodule "app/src/main/cpp/Vulkan-Headers"]
+	path = app/src/main/cpp/Vulkan-Headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers.git
