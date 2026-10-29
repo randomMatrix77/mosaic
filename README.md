@@ -1,46 +1,109 @@
-# Mosaic Android proof of concept
+# Mosaic
 
-Mosaic is a single-screen Android proof of concept with a real Kotlin → Chaquopy → Python → JNI → llama.cpp path. Python owns chat application logic, SQLite persistence, history selection, embedding persistence, and retrieval scoring. Kotlin supplies the UI, app-private storage locations, lifecycle handling, and model-file import.
+Mosaic is an Android proof of concept for a local-first personal intelligence application. It demonstrates that application logic can live in embedded Python while models run fully on an Android device:
 
-## Build and install
+```text
+Kotlin + Jetpack Compose → Chaquopy → Python → JNI → llama.cpp
+                                  ↘ SQLite
+```
 
-The project expects Android SDK API 36, NDK 27.2.12479018, CMake 3.22.1, and Java 17. From the repository root:
+This is deliberately a small, diagnostic-oriented application—not the full Mosaic product. It is useful as a working reference for local Qwen generation, multimodal embeddings, and Python-owned persistence on Android.
 
-```sh
+## Current capabilities
+
+- Offline Qwen 3.5 4B generation using llama.cpp, with the chat flow owned by Python.
+- Qwen GPU execution on the tested Galaxy Z Fold 6 via OpenCL, with a CPU fallback.
+- EmbeddingGemma 2 text and image embeddings through the same native backend.
+- A real text-to-image retrieval diagnostic over cat, car, and banana test photos.
+- Python `sqlite3` persistence for conversations, messages, sources, and float32 embedding vectors.
+- A minimal Compose interface for chat, conversation management, model import, and diagnostics.
+
+## Intentionally not included
+
+Mosaic does **not** yet include RAG, document ingestion, automatic indexing, memory extraction, semantic chat search, a vector database, cloud services, authentication, audio/video embeddings, or a production-polished interface.
+
+## Clone the repository
+
+This repository uses Git submodules for llama.cpp and native header dependencies. Clone recursively:
+
+```bash
+git clone --recurse-submodules https://github.com/randomMatrix77/mosaic.git
+cd mosaic
+```
+
+If you already cloned it without submodules, initialize them before building:
+
+```bash
+git submodule update --init --recursive
+```
+
+The checked-in submodules are:
+
+- [`llama.cpp`](https://github.com/ggml-org/llama.cpp), the native inference runtime.
+- [`OpenCL-Headers`](https://github.com/KhronosGroup/OpenCL-Headers), used by the selected Android GPU backend.
+- [`Vulkan-Headers`](https://github.com/KhronosGroup/Vulkan-Headers), retained as a native dependency for experimentation; Vulkan is not the active Qwen backend.
+
+Model weights are intentionally not in Git or the APK. Obtain them separately and comply with their respective licences and terms:
+
+- [Qwen 3.5 4B Q4_K_M GGUF](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf)
+- [EmbeddingGemma 2 GGUF repository](https://huggingface.co/ggml-org/embeddinggemma-2-GGUF) — import both the embedding GGUF and its matching `mmproj` file for image embeddings.
+
+## Requirements
+
+The currently tested development environment is macOS with Java 17, Android SDK API 36, Android NDK `27.2.12479018`, and CMake `3.22.1`. A physical Android device with USB debugging is recommended; the implementation was verified on a Samsung Galaxy Z Fold 6 (`SM-F956B`).
+
+There is one additional native prerequisite for the current OpenCL configuration: the project links against an Android-device-compatible `libOpenCL.so` stub in `app/src/main/cpp/prebuilt/arm64-v8a/`. That binary is intentionally ignored by Git because it is device/vendor specific. Read the [technical guide](docs/TECHNICAL.md#opencl-gpu-linkage) before attempting a fresh GPU build on another phone.
+
+## Build, install, and run
+
+From the repository root:
+
+```bash
 ./gradlew :app:assembleDebug
+adb devices
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Package ID: `dev.mosaic.poc`. Models are not bundled or mocked. The app uses Android's file picker and copies selected files to app-private storage.
+`adb install -r` updates the app without clearing its data. Do not uninstall or clear app data if you want to retain imported models, conversations, and the SQLite database.
 
-For Qwen, select **Import Qwen GGUF** and choose the Qwen 3.5 4B Q4_K_M GGUF. On the target Fold 6, the app uses llama.cpp's OpenCL backend to offload the model to the Adreno 750 GPU, with a 2048-token context and 128-token cap.
+On first launch:
 
-For EmbeddingGemma 2, import both official Q8 artifacts, in this order:
+1. Use the Qwen import action to select the downloaded Qwen GGUF.
+2. Wait for model loading, then create a conversation and send a message.
+3. To run embedding diagnostics, import the EmbeddingGemma GGUF and matching multimodal projector (`mmproj`) using the corresponding file-picker actions.
 
-1. **Import EmbeddingGemma GGUF**: `embeddinggemma-2-Q8_0.gguf` from [ggml-org/embeddinggemma-2-GGUF](https://huggingface.co/ggml-org/embeddinggemma-2-GGUF).
-2. **Import EmbeddingGemma projector**: `mmproj-embeddinggemma-2-Q8_0.gguf` from the same repository.
+The app copies selected model files into its private storage; it does not bundle multi-gigabyte weights in the APK.
 
-Use **Text embeddings** for real text vectors and **Image retrieval** for the bundled cat/car/banana photograph experiment. **Store image vectors** writes real image embeddings as SQLite float32 blobs, while **Load saved vectors** retrieves those image vectors without calling image embedding again and performs new text-query embeddings. The embedding model and Qwen intentionally share one native model slot: importing one unloads the other.
+## What a new contributor should know
 
-## Local persistence
+The Android app is intentionally single-module and compact. Kotlin handles UI, lifecycle, file selection, and native bindings. Python owns message handling, bounded conversation-history preparation, persistence, embedding interfaces, retrieval calculations, and errors. llama.cpp owns actual model loading and inference.
 
-Kotlin passes the app-private database path to Python at startup. Python's standard-library `sqlite3` backend stores:
+The project uses only one native model slot at a time to keep memory use practical. Loading EmbeddingGemma unloads Qwen and vice versa. Qwen is restored automatically on startup when its imported file is still present.
 
-* conversations and chronological messages, including role, model identifier, timestamp, and completion status;
-* image sources with fingerprints and JSON metadata; and
-* normalized embedding vectors as validated little-endian IEEE-754 float32 blobs.
+For component layout, data formats, model settings, testing evidence, and troubleshooting, read the [technical guide](docs/TECHNICAL.md).
 
-On the Fold the database is at `files/mosaic/mosaic.sqlite3` (equivalent to `/data/user/0/dev.mosaic.poc/files/mosaic/mosaic.sqlite3`). It uses foreign keys, WAL mode, transactions with rollback, and schema versioning via `PRAGMA user_version`. Do not delete the app or clear its data when installing an update: use `adb install -r` to retain conversations and vectors.
+## Verification snapshot
 
-Create a conversation before sending a chat message. Existing conversations can be opened after a process restart. Python bounds completed stored history before asking JNI to apply Qwen's native chat template; failed generation never produces a completed assistant-message record.
+The following were run on the physical Fold 6, not mocked:
 
-## Layout
+- Qwen generation through Kotlin → Python → JNI → llama.cpp → Python → Kotlin, with all 33 model layers offloaded through OpenCL.
+- 768-dimensional EmbeddingGemma text and image vectors.
+- Text-to-image retrieval ranked the matching cat, car, and banana photos first for their respective text queries.
+- Saved image embeddings were reloaded from SQLite after an application process restart and produced the expected rankings without regenerating image vectors.
+- Conversations and completed assistant replies persisted through a force-stop/restart; a follow-up response used earlier stored context.
 
-* `app/src/main/java/dev/mosaic/poc/MainActivity.kt` — Compose UI and off-main-thread Chaquopy invocation.
-* `app/src/main/python/mosaic/core.py` — Python-owned message handling.
-* `app/src/main/python/mosaic/inference.py` — Python inference-provider boundary with the Android JNI adapter.
-* `app/src/main/python/mosaic/embeddings.py` — model-agnostic Python embedding interface; audio and video explicitly raise `NotImplementedError`.
-* `app/src/main/python/mosaic/embedding_diagnostics.py` — real text and image embedding/retrieval checks.
-* `app/src/main/python/mosaic/storage.py` — portable standard-library SQLite schema, migrations, repositories, and float32 vector codec.
-* `app/src/main/cpp/mosaic_jni.cpp` — llama.cpp JNI implementation, including model lifecycle, GPU/CPU fallback, generation, text embeddings, and libmtmd image embeddings.
-* `app/src/main/cpp/llama.cpp/` — pinned official llama.cpp source (`6b9ba4f2e8c1436511956f0b3c309e2c9e642071`).
+The [technical guide](docs/TECHNICAL.md#verified-results) records the measured diagnostic results and the remaining limitations.
+
+## Project map
+
+```text
+app/
+  src/main/java/       Kotlin Compose UI and JNI bridge
+  src/main/python/     Mosaic application, inference, embeddings, and storage
+  src/main/cpp/        Native bridge, CMake, llama.cpp and header submodules
+docs/                  Implementation and operational documentation
+```
+
+## Status
+
+This is an actively evolving Android experiment. Preserve existing app data while testing, keep model files outside Git, and treat the diagnostic UI and benchmark results as proof-of-concept tooling rather than production UX.
