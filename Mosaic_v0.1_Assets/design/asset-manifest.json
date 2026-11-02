@@ -1,0 +1,147 @@
+{
+  "version": "0.1",
+  "origin": "Hand-authored source assets for Mosaic v0.1 screenshots",
+  "screens": {
+    "TopBar": [
+      "menu",
+      "arrow-left",
+      "search",
+      "more-vertical",
+      "settings",
+      "plus"
+    ],
+    "ChatComposer": [
+      "plus",
+      "image",
+      "send",
+      "stop",
+      "x"
+    ],
+    "AgentActivity": [
+      "sparkles",
+      "check-circle",
+      "alert-circle",
+      "clock",
+      "chevron-down",
+      "chevron-up"
+    ],
+    "Conversations": [
+      "message-square",
+      "message-circle-plus",
+      "pencil",
+      "trash",
+      "search"
+    ],
+    "Memories": [
+      "layers",
+      "search",
+      "filter",
+      "network",
+      "file-text",
+      "link",
+      "external-link",
+      "pencil",
+      "trash"
+    ],
+    "ImagesAndVision": [
+      "image",
+      "images",
+      "eye",
+      "photo-picker",
+      "search",
+      "expand"
+    ],
+    "Capabilities": [
+      "brain",
+      "database",
+      "layers",
+      "eye",
+      "sparkles"
+    ],
+    "Settings": [
+      "settings",
+      "cpu",
+      "shield-check",
+      "moon",
+      "sun",
+      "info",
+      "refresh"
+    ],
+    "FoldLayout": [
+      "layout-panel",
+      "chevron-left",
+      "chevron-right",
+      "expand"
+    ]
+  },
+  "branding": [
+    "mosaic-symbol",
+    "mosaic-wordmark",
+    "mosaic-lockup",
+    "mosaic-welcome-wave",
+    "mosaic-app-icon"
+  ],
+  "iconFiles": [
+    "icons/svg/menu.svg",
+    "icons/svg/arrow-left.svg",
+    "icons/svg/arrow-right.svg",
+    "icons/svg/chevron-left.svg",
+    "icons/svg/chevron-right.svg",
+    "icons/svg/chevron-down.svg",
+    "icons/svg/chevron-up.svg",
+    "icons/svg/plus.svg",
+    "icons/svg/x.svg",
+    "icons/svg/send.svg",
+    "icons/svg/stop.svg",
+    "icons/svg/message-square.svg",
+    "icons/svg/message-circle-plus.svg",
+    "icons/svg/layers.svg",
+    "icons/svg/network.svg",
+    "icons/svg/image.svg",
+    "icons/svg/images.svg",
+    "icons/svg/eye.svg",
+    "icons/svg/search.svg",
+    "icons/svg/sparkles.svg",
+    "icons/svg/brain.svg",
+    "icons/svg/database.svg",
+    "icons/svg/settings.svg",
+    "icons/svg/more-vertical.svg",
+    "icons/svg/pencil.svg",
+    "icons/svg/trash.svg",
+    "icons/svg/copy.svg",
+    "icons/svg/external-link.svg",
+    "icons/svg/link.svg",
+    "icons/svg/check.svg",
+    "icons/svg/check-circle.svg",
+    "icons/svg/alert-circle.svg",
+    "icons/svg/info.svg",
+    "icons/svg/clock.svg",
+    "icons/svg/history.svg",
+    "icons/svg/shield-check.svg",
+    "icons/svg/lock.svg",
+    "icons/svg/file-text.svg",
+    "icons/svg/folder.svg",
+    "icons/svg/filter.svg",
+    "icons/svg/sliders.svg",
+    "icons/svg/arrow-up-right.svg",
+    "icons/svg/refresh.svg",
+    "icons/svg/layout-panel.svg",
+    "icons/svg/expand.svg",
+    "icons/svg/user.svg",
+    "icons/svg/cpu.svg",
+    "icons/svg/play.svg",
+    "icons/svg/wifi-off.svg",
+    "icons/svg/moon.svg",
+    "icons/svg/sun.svg",
+    "icons/svg/paperclip.svg",
+    "icons/svg/photo-picker.svg",
+    "icons/svg/chart.svg"
+  ],
+  "notes": [
+    "Only actual supported capabilities appear in production.",
+    "No microphone or audio UI.",
+    "Demo reference photos are placeholders, not app data or gallery content.",
+    "Standard icons should be theme-tinted in Compose.",
+    "No screenshot cropping is required to obtain these assets."
+  ]
+}

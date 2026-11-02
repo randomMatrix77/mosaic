@@ -1,0 +1,21 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name=".DebugCommandActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.Mosaic.DebugCommand">
+            <intent-filter>
+                <action android:name="dev.mosaic.poc.DEBUG_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <receiver
+            android:name=".DebugCommandReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="dev.mosaic.poc.DEBUG_COMMAND" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
