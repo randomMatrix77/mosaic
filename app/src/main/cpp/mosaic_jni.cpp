@@ -1,5 +1,7 @@
 #include <android/log.h>
+#include <atomic>
 #include <cmath>
+#include <functional>
 #include <jni.h>
 #include <mutex>
 #include <sstream>
@@ -16,7 +18,9 @@
 
 namespace {
 constexpr int kContextSize = 2048;
-constexpr int kMaxTokens = 128;
+// Structured extraction may need to close a small JSON document. 256 remains
+// deliberately bounded while avoiding truncation of valid evidence payloads.
+constexpr int kMaxTokens = 256;
 constexpr int kAllGpuLayers = -1;
 
 enum class LoadedModelKind { None, Generation, Embedding };
@@ -33,6 +37,7 @@ void image_log(const char *message) {
 }
 
 std::mutex g_mutex;
+std::atomic_bool g_cancel_requested{false};
 llama_model *g_model = nullptr;
 common_chat_templates_ptr g_templates;
 LoadedModelKind g_model_kind = LoadedModelKind::None;
@@ -56,6 +61,29 @@ std::string take(JNIEnv *env, jstring value) {
 
 jstring result(JNIEnv *env, const std::string &value) {
     return env->NewStringUTF(value.c_str());
+}
+
+std::function<bool(const std::string &)> java_token_callback(JNIEnv *env, jobject listener) {
+    if (!listener) return {};
+    jclass listener_class = env->GetObjectClass(listener);
+    if (!listener_class) return {};
+    const jmethodID on_delta = env->GetMethodID(listener_class, "onDelta", "(Ljava/lang/String;)V");
+    env->DeleteLocalRef(listener_class);
+    if (!on_delta) {
+        env->ExceptionClear();
+        return {};
+    }
+    return [env, listener, on_delta](const std::string &piece) {
+        jstring value = env->NewStringUTF(piece.c_str());
+        if (!value) return false;
+        env->CallVoidMethod(listener, on_delta, value);
+        env->DeleteLocalRef(value);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            return false;
+        }
+        return true;
+    };
 }
 
 bool has_gpu_device() {
@@ -144,13 +172,52 @@ bool append_image_embedding(llama_batch_ext *batch, const mtmd_input_chunk *chun
     return true;
 }
 
-std::string generate_locked(const std::vector<common_chat_msg> &messages) {
-    common_chat_templates_inputs template_inputs;
-    template_inputs.messages = messages;
-    template_inputs.add_generation_prompt = true;
-    template_inputs.enable_thinking = false; // Qwen 3.5 non-thinking mode.
-    const std::string prompt = common_chat_templates_apply(
-        g_templates.get(), template_inputs).prompt.str();
+std::string complete_utf8_prefix(std::string &pending, bool final) {
+    std::string safe;
+    size_t index = 0;
+    while (index < pending.size()) {
+        const unsigned char lead = static_cast<unsigned char>(pending[index]);
+        if (lead < 0x80) {
+            safe.push_back(static_cast<char>(lead));
+            ++index;
+            continue;
+        }
+        int width = 0;
+        if (lead >= 0xC2 && lead <= 0xDF) width = 2;
+        else if (lead >= 0xE0 && lead <= 0xEF) width = 3;
+        else if (lead >= 0xF0 && lead <= 0xF4) width = 4;
+        else {
+            safe.append("\xEF\xBF\xBD");
+            ++index;
+            continue;
+        }
+        if (index + static_cast<size_t>(width) > pending.size()) {
+            if (!final) break;
+            safe.append("\xEF\xBF\xBD");
+            ++index;
+            continue;
+        }
+        bool valid = true;
+        for (int offset = 1; offset < width; ++offset) {
+            if ((static_cast<unsigned char>(pending[index + offset]) & 0xC0) != 0x80) {
+                valid = false;
+                break;
+            }
+        }
+        if (!valid) {
+            safe.append("\xEF\xBF\xBD");
+            ++index;
+            continue;
+        }
+        safe.append(pending, index, static_cast<size_t>(width));
+        index += static_cast<size_t>(width);
+    }
+    pending.erase(0, index);
+    return safe;
+}
+
+std::string generate_prompt_locked(const std::string &prompt,
+                                   const std::function<bool(const std::string &)> &on_delta = {}) {
     const llama_vocab *vocab = llama_model_get_vocab(g_model);
     int count = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), nullptr, 0, false, true);
     if (count <= 0 || count >= kContextSize - kMaxTokens) return "ERROR: prompt is too long.";
@@ -174,8 +241,13 @@ std::string generate_locked(const std::vector<common_chat_msg> &messages) {
     set_batch(batch, tokens, 0);
 
     std::string output;
+    std::string utf8_pending;
     int position = 0;
     for (int generated = 0; generated < kMaxTokens; ++generated) {
+        if (g_cancel_requested.load()) {
+            output = "CANCELLED: native generation cancelled.";
+            break;
+        }
         if (llama_process(context, LLAMA_PROCESS_TYPE_DECODE, batch) != 0) {
             output = "ERROR: llama.cpp decode failed.";
             break;
@@ -187,6 +259,14 @@ std::string generate_locked(const std::vector<common_chat_msg> &messages) {
         const int piece_size = llama_token_to_piece(vocab, next, piece, sizeof(piece), 0, true);
         if (piece_size < 0) { output = "ERROR: token conversion failed."; break; }
         output.append(piece, piece_size);
+        if (on_delta) {
+            utf8_pending.append(piece, piece_size);
+            const std::string safe_piece = complete_utf8_prefix(utf8_pending, false);
+            if (!safe_piece.empty() && !on_delta(safe_piece)) {
+                output = "ERROR: streaming callback failed.";
+                break;
+            }
+        }
         llama_sampler_accept(sampler, next);
         tokens.assign(1, next);
         set_batch(batch, tokens, position);
@@ -194,6 +274,146 @@ std::string generate_locked(const std::vector<common_chat_msg> &messages) {
     llama_batch_ext_free(batch);
     llama_sampler_free(sampler);
     llama_free(context);
+    if (on_delta && !utf8_pending.empty() && output.rfind("ERROR:", 0) != 0 &&
+        output.rfind("CANCELLED:", 0) != 0) {
+        const std::string safe_piece = complete_utf8_prefix(utf8_pending, true);
+        if (!safe_piece.empty() && !on_delta(safe_piece)) return "ERROR: streaming callback failed.";
+    }
+    return output.empty() ? "(no generated tokens)" : output;
+}
+
+std::string generate_locked(const std::vector<common_chat_msg> &messages) {
+    common_chat_templates_inputs template_inputs;
+    template_inputs.messages = messages;
+    template_inputs.add_generation_prompt = true;
+    template_inputs.enable_thinking = false; // Qwen 3.5 non-thinking mode.
+    return generate_prompt_locked(common_chat_templates_apply(g_templates.get(), template_inputs).prompt.str());
+}
+
+std::string generate_tool_chat_locked(const std::vector<common_chat_msg> &messages,
+                                      const std::vector<common_chat_tool> &tools,
+                                      const std::function<bool(const std::string &)> &on_delta = {}) {
+    common_chat_templates_inputs template_inputs;
+    template_inputs.messages = messages;
+    template_inputs.tools = tools;
+    template_inputs.tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
+    template_inputs.parallel_tool_calls = false;
+    template_inputs.add_generation_prompt = true;
+    template_inputs.enable_thinking = false;
+
+    // common_chat_session uses the GGUF's native Jinja template and parser,
+    // including the Qwen 3.5 XML tool-call format.
+    const llama_vocab *vocab = llama_model_get_vocab(g_model);
+    common_chat_session session(g_templates.get(), vocab, template_inputs);
+    const std::string generated = generate_prompt_locked(session.prompt().str(), on_delta);
+    if (generated.rfind("ERROR:", 0) == 0 || generated.rfind("CANCELLED:", 0) == 0) return generated;
+    try {
+        auto parsed = session.finish(common_chat_input(generated));
+        auto output = parsed.to_json_oaicompat();
+        output["raw_output"] = generated;
+        output["parser"] = "llama.cpp common_chat_session";
+        return output.dump();
+    } catch (const std::exception &error) {
+        return "ERROR: llama.cpp native chat parser failed: " + std::string(error.what());
+    }
+}
+
+std::string generate_image_locked(const std::string &message, const std::string &image_path) {
+    if (!g_mtmd || !mtmd_support_vision(g_mtmd)) {
+        return "ERROR: load the matching Qwen multimodal projector before sending an image.";
+    }
+
+    const mtmd_helper_init_opt init_options = mtmd_helper_init_opt_default();
+    mtmd_helper_bitmap_wrapper wrapper = mtmd_helper_bitmap_init_from_file(
+        g_mtmd, image_path.c_str(), false, init_options);
+    if (!wrapper.bitmap) return "ERROR: image decoder could not read the supplied image.";
+
+    common_chat_msg chat;
+    chat.role = "user";
+    // libmtmd replaces this marker with the model-specific vision boundary
+    // tokens and image embeddings. The native Qwen chat template supplies the
+    // surrounding user and assistant structure.
+    chat.content = std::string(mtmd_default_marker()) + message;
+    const std::string formatted = common_chat_format_single(g_templates.get(), {}, chat, true, true);
+    mtmd_input_text input = {formatted.data(), formatted.size(), false, true};
+    const mtmd_bitmap *bitmaps[] = {wrapper.bitmap};
+    mtmd_input_chunks *chunks = mtmd_input_chunks_init();
+    std::string output;
+
+    if (mtmd_tokenize(g_mtmd, chunks, &input, bitmaps, 1) != 0) {
+        output = "ERROR: llama.cpp could not tokenize the multimodal prompt.";
+    } else {
+        llama_pos positions = 0;
+        for (size_t index = 0; index < mtmd_input_chunks_size(chunks); ++index) {
+            positions += mtmd_input_chunk_get_n_pos(mtmd_input_chunks_get(chunks, index));
+        }
+        if (positions <= 0 || positions >= kContextSize - kMaxTokens) {
+            output = "ERROR: image prompt exceeds the 2048-token context budget.";
+        } else {
+            llama_context_params context_params = llama_context_default_params();
+            context_params.n_ctx = kContextSize;
+            context_params.n_batch = 512;
+            context_params.n_ubatch = 512;
+            llama_context *context = llama_init_from_model(g_model, context_params);
+            if (!context) {
+                output = "ERROR: unable to allocate a multimodal Qwen context.";
+            } else {
+                llama_sampler *sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+                llama_sampler_chain_add(sampler, llama_sampler_init_top_k(20));
+                llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.8f, 1));
+                llama_sampler_chain_add(sampler, llama_sampler_init_temp(0.7f));
+                llama_sampler_chain_add(sampler, llama_sampler_init_dist(42));
+                llama_pos n_past = 0;
+                bool evaluated = true;
+                const size_t n_chunks = mtmd_input_chunks_size(chunks);
+                for (size_t index = 0; index < n_chunks && evaluated; ++index) {
+                    const mtmd_input_chunk *chunk = mtmd_input_chunks_get(chunks, index);
+                    llama_pos new_n_past = n_past;
+                    if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                        evaluated = mtmd_helper_eval_chunk_single(g_mtmd, context, chunk, n_past, 0, 512,
+                                                                  index + 1 == n_chunks, &new_n_past) == 0;
+                    } else if (mtmd_input_chunk_get_type(chunk) == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+                        evaluated = mtmd_encode_chunk(g_mtmd, chunk) == 0 &&
+                            mtmd_helper_decode_image_chunk(g_mtmd, context, chunk, mtmd_get_output_embd(g_mtmd),
+                                                           n_past, 0, 512, &new_n_past, nullptr, nullptr) == 0;
+                    } else {
+                        evaluated = false;
+                    }
+                    n_past = new_n_past;
+                }
+                if (!evaluated) {
+                    output = "ERROR: llama.cpp failed while evaluating the image prompt.";
+                } else {
+                    const llama_vocab *vocab = llama_model_get_vocab(g_model);
+                    llama_batch_ext *batch = llama_batch_ext_init(context);
+                    for (int generated = 0; generated < kMaxTokens; ++generated) {
+                        const llama_token next = llama_sampler_sample(sampler, context, -1);
+                        if (llama_vocab_is_eog(vocab, next)) break;
+                        char piece[256];
+                        const int piece_size = llama_token_to_piece(vocab, next, piece, sizeof(piece), 0, true);
+                        if (piece_size < 0) { output = "ERROR: image response token conversion failed."; break; }
+                        output.append(piece, piece_size);
+                        llama_sampler_accept(sampler, next);
+                        llama_batch_ext_clear(batch);
+                        const int token_index = llama_batch_ext_add_token(batch, 0, next);
+                        llama_batch_ext_set_pos(batch, token_index, &n_past);
+                        llama_batch_ext_set_output_logits(batch, token_index, true);
+                        ++n_past;
+                        if (llama_process(context, LLAMA_PROCESS_TYPE_DECODE, batch) != 0) {
+                            output = "ERROR: llama.cpp failed while generating the image response.";
+                            break;
+                        }
+                    }
+                    llama_batch_ext_free(batch);
+                }
+                llama_sampler_free(sampler);
+                llama_free(context);
+            }
+        }
+    }
+    mtmd_input_chunks_free(chunks);
+    mtmd_bitmap_free(wrapper.bitmap);
+    if (wrapper.video_ctx) mtmd_helper_video_free(wrapper.video_ctx);
     return output.empty() ? "(no generated tokens)" : output;
 }
 } // namespace
@@ -278,11 +498,35 @@ Java_dev_mosaic_poc_NativeLlama_loadEmbeddingProjector(JNIEnv *env, jclass, jstr
 }
 
 extern "C" JNIEXPORT jstring JNICALL
+Java_dev_mosaic_poc_NativeLlama_loadGenerationProjector(JNIEnv *env, jclass, jstring path) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_model || g_model_kind != LoadedModelKind::Generation) {
+        return result(env, "ERROR: load the Qwen GGUF before its multimodal projector.");
+    }
+    if (g_mtmd) mtmd_free(g_mtmd);
+    g_mtmd = nullptr;
+    const std::string projector_path = take(env, path);
+    mtmd_context_params params = mtmd_context_params_default();
+    // The main Qwen model remains on the tested OpenCL path. Keep projector
+    // encode on CPU until Android OpenCL projector behavior is independently measured.
+    params.use_gpu = false;
+    g_mtmd = mtmd_init_from_file(projector_path.c_str(), g_model, params);
+    if (!g_mtmd) return result(env, "ERROR: llama.cpp could not load the Qwen multimodal projector.");
+    if (!mtmd_support_vision(g_mtmd)) {
+        mtmd_free(g_mtmd);
+        g_mtmd = nullptr;
+        return result(env, "ERROR: the selected Qwen projector does not support image input.");
+    }
+    return result(env, "OK: Qwen multimodal projector loaded");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
 Java_dev_mosaic_poc_NativeLlama_generate(JNIEnv *env, jclass, jstring message) {
     std::lock_guard<std::mutex> lock(g_mutex);
     if (!g_model || g_model_kind != LoadedModelKind::Generation) {
         return result(env, "ERROR: no generation model is loaded.");
     }
+    g_cancel_requested.store(false);
     common_chat_msg chat;
     chat.role = "user";
     chat.content = take(env, message);
@@ -295,6 +539,7 @@ Java_dev_mosaic_poc_NativeLlama_generateChat(JNIEnv *env, jclass, jstring serial
     if (!g_model || g_model_kind != LoadedModelKind::Generation) {
         return result(env, "ERROR: no generation model is loaded.");
     }
+    g_cancel_requested.store(false);
     try {
         const auto input = nlohmann::json::parse(take(env, serialized_messages));
         if (!input.is_array() || input.empty() || input.size() > 128) {
@@ -316,6 +561,89 @@ Java_dev_mosaic_poc_NativeLlama_generateChat(JNIEnv *env, jclass, jstring serial
     } catch (const std::exception &) {
         return result(env, "ERROR: invalid serialized chat history.");
     }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_mosaic_poc_NativeLlama_generateChatWithTools(JNIEnv *env, jclass, jstring serialized_request) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_model || g_model_kind != LoadedModelKind::Generation) {
+        return result(env, "ERROR: no generation model is loaded.");
+    }
+    g_cancel_requested.store(false);
+    try {
+        const auto input = common_json::parse(take(env, serialized_request));
+        if (!input.is_object() || !input.contains("messages")) {
+            return result(env, "ERROR: tool chat request requires a messages array.");
+        }
+        const auto &raw_messages = input.at("messages");
+        if (!raw_messages.is_array() || raw_messages.empty() || raw_messages.size() > 128) {
+            return result(env, "ERROR: tool chat history must be a non-empty array of at most 128 messages.");
+        }
+        const auto messages = common_chat_msgs_parse_oaicompat(raw_messages);
+        const auto tools = common_chat_tools_parse_oaicompat(
+            input.contains("tools") ? input.at("tools") : common_json::array());
+        if (tools.size() > 8) {
+            return result(env, "ERROR: tool chat supports at most 8 registered tools.");
+        }
+        return result(env, generate_tool_chat_locked(messages, tools));
+    } catch (const std::exception &error) {
+        return result(env, "ERROR: invalid tool chat request: " + std::string(error.what()));
+    }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_mosaic_poc_NativeLlama_generateChatWithToolsStream(JNIEnv *env, jclass, jstring serialized_request,
+                                                             jobject listener) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_model || g_model_kind != LoadedModelKind::Generation) {
+        return result(env, "ERROR: no generation model is loaded.");
+    }
+    const auto on_delta = java_token_callback(env, listener);
+    if (!on_delta) return result(env, "ERROR: invalid native token listener.");
+    try {
+        const auto input = common_json::parse(take(env, serialized_request));
+        if (!input.is_object() || !input.contains("messages")) {
+            return result(env, "ERROR: tool chat request requires a messages array.");
+        }
+        const auto &raw_messages = input.at("messages");
+        if (!raw_messages.is_array() || raw_messages.empty() || raw_messages.size() > 128) {
+            return result(env, "ERROR: tool chat history must be a non-empty array of at most 128 messages.");
+        }
+        const auto messages = common_chat_msgs_parse_oaicompat(raw_messages);
+        const auto tools = common_chat_tools_parse_oaicompat(
+            input.contains("tools") ? input.at("tools") : common_json::array());
+        if (tools.size() > 8) {
+            return result(env, "ERROR: tool chat supports at most 8 registered tools.");
+        }
+        return result(env, generate_tool_chat_locked(messages, tools, on_delta));
+    } catch (const std::exception &error) {
+        return result(env, "ERROR: invalid tool chat request: " + std::string(error.what()));
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_mosaic_poc_NativeLlama_prepareGeneration(JNIEnv *, jclass) {
+    // Called by Python immediately before it announces prompt processing. A
+    // Stop request made after that event remains set through native prefill and
+    // decode instead of being lost when the streaming JNI method begins.
+    g_cancel_requested.store(false);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_mosaic_poc_NativeLlama_generateWithImage(JNIEnv *env, jclass, jstring message, jstring image_path) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_model || g_model_kind != LoadedModelKind::Generation) {
+        return result(env, "ERROR: no Qwen generation model is loaded.");
+    }
+    g_cancel_requested.store(false);
+    return result(env, generate_image_locked(take(env, message), take(env, image_path)));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_mosaic_poc_NativeLlama_cancelGeneration(JNIEnv *, jclass) {
+    // Deliberately lock-free: generation holds g_mutex while decoding, and
+    // cancellation must not wait for that work to finish.
+    g_cancel_requested.store(true);
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL
@@ -443,4 +771,10 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_dev_mosaic_poc_NativeLlama_isEmbeddingProjectorLoaded(JNIEnv *, jclass) {
     std::lock_guard<std::mutex> lock(g_mutex);
     return g_mtmd ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_mosaic_poc_NativeLlama_isGenerationProjectorLoaded(JNIEnv *, jclass) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_mtmd && g_model_kind == LoadedModelKind::Generation ? JNI_TRUE : JNI_FALSE;
 }

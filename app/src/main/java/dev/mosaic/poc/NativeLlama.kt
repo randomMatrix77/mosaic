@@ -6,14 +6,21 @@ object NativeLlama {
     @JvmStatic external fun loadModel(modelPath: String): String
     @JvmStatic external fun loadEmbeddingModel(modelPath: String): String
     @JvmStatic external fun loadEmbeddingProjector(projectorPath: String): String
+    @JvmStatic external fun loadGenerationProjector(projectorPath: String): String
     @JvmStatic external fun generate(message: String): String
     @JvmStatic external fun generateChat(serializedMessages: String): String
+    @JvmStatic external fun generateChatWithTools(serializedRequest: String): String
+    @JvmStatic external fun generateChatWithToolsStream(serializedRequest: String, listener: NativeTokenListener): String
+    @JvmStatic external fun prepareGeneration()
+    @JvmStatic external fun generateWithImage(message: String, imagePath: String): String
     @JvmStatic external fun embedText(text: String): FloatArray?
     @JvmStatic external fun embedImage(imagePath: String): FloatArray?
     @JvmStatic external fun unloadModel()
+    @JvmStatic external fun cancelGeneration()
     @JvmStatic external fun isModelLoaded(): Boolean
     @JvmStatic external fun isEmbeddingModelLoaded(): Boolean
     @JvmStatic external fun isEmbeddingProjectorLoaded(): Boolean
+    @JvmStatic external fun isGenerationProjectorLoaded(): Boolean
 
     init {
         System.loadLibrary("mosaic_jni")
