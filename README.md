@@ -1,29 +1,69 @@
 # Mosaic
 
-Mosaic is an Android proof of concept for a local-first personal intelligence application. It demonstrates that application logic can live in embedded Python while models run fully on an Android device:
+<p align="center">
+  <strong>A private, local-first intelligence workspace for Android.</strong><br />
+  Built around on-device Qwen, multimodal retrieval, evidence-backed memory, and a Python-owned agent.
+</p>
+
+<p align="center">
+  <img src="Mosaic_v0.1_UI_Handoff/screens/10_fold.png" alt="Mosaic adaptive Fold layout" width="86%" />
+</p>
+<p align="center">
+  <img src="Mosaic_v0.1_UI_Handoff/screens/02_chat.png" alt="Mosaic chat screen" width="31%" />
+  <img src="Mosaic_v0.1_UI_Handoff/screens/03_conversations.png" alt="Mosaic conversations screen" width="31%" />
+</p>
+
+Mosaic brings a complete local intelligence stack to Android: Kotlin renders a responsive Fold-aware interface; Chaquopy hosts the application logic in Python; and llama.cpp runs Qwen and EmbeddingGemma directly on the device.
 
 ```text
 Kotlin + Jetpack Compose → Chaquopy → Python → JNI → llama.cpp
                                   ↘ SQLite
 ```
 
-This is deliberately a small, diagnostic-oriented application—not the full Mosaic product. It is useful as a working reference for local Qwen generation, multimodal embeddings, and Python-owned persistence on Android.
+## What Mosaic does
 
-## Current capabilities
+### Local Qwen chat, with real streaming
 
-- Offline Qwen 3.5 4B generation using llama.cpp, with the chat flow owned by Python.
-- Qwen 3.5 4B image-plus-text requests using its matching multimodal projector.
-- Qwen GPU execution on the tested Galaxy Z Fold 6 via OpenCL, with a CPU fallback.
-- EmbeddingGemma 2 text and image embeddings through the same native backend.
-- A real text-to-image retrieval diagnostic over cat, car, and banana test photos.
-- A Python-owned Qwen tool loop with safe, read-only image and memory retrieval tools; Qwen decides whether to call them.
-- Python `sqlite3` persistence for conversations, messages, sources, and float32 embedding vectors.
-- An evidence-backed SQLite memory graph with entities, claims, corrections, provenance, and semantic claim retrieval, verified on the Fold 6.
-- A minimal Compose interface for chat, conversation management, model import, and diagnostics.
+Qwen 3.5 4B runs through llama.cpp on the phone, with OpenCL GPU offload on the Galaxy Z Fold 6 and a CPU fallback. Final-answer tokens stream into the Compose chat interface, with lifecycle-safe cancellation and clear agent activity states.
 
-## Intentionally not included
+### Image understanding and visual retrieval
 
-Mosaic does **not** yet include RAG, document ingestion, automatic indexing, background memory processing, a vector database, cloud services, authentication, audio/video embeddings, or a production-polished interface.
+Qwen accepts an image plus a question through its matching multimodal projector. EmbeddingGemma 2 creates real text and image vectors for semantic image retrieval, and the Images workspace lets people deliberately add, browse, and search their local index.
+
+### Evidence-backed personal memory
+
+Python owns a portable SQLite ledger for conversations, messages, sources, and float32 embeddings. On top of that ledger, Mosaic builds a knowledge graph of entities and claims with correction history and provenance back to the exact source message or available text span.
+
+### An agent that uses tools safely
+
+Qwen decides whether to answer directly or call an allow-listed Python tool. The current tool set covers memory search, image search, web search, and webpage retrieval. Tool requests are strictly validated; the model never receives arbitrary Python, shell, or filesystem access.
+
+### Current web research, local reasoning
+
+When configured by the user, DeepSeek Search & Fetch supplies web search results and page content. Qwen remains entirely local: DeepSeek is used only for retrieval, and final reasoning and answer generation stay on-device. Search queries and fetched URLs are disclosed before use and API keys stay in Android-backed secure settings.
+
+### Designed for the Fold
+
+Mosaic adapts from a compact cover-screen workspace with edge-swipe navigation to a persistent navigation rail and contextual panel on the unfolded display. Conversations, drafts, requests, and model state survive layout changes.
+
+## Built on a local-native stack
+
+| Layer | Role |
+| --- | --- |
+| Kotlin + Jetpack Compose | Fold-aware UI, lifecycle, file pickers, streaming state, and secure settings. |
+| Python 3.11 via Chaquopy | Conversation logic, agent orchestration, tools, skills, memory, retrieval, and SQLite persistence. |
+| llama.cpp + JNI | Qwen generation and vision, EmbeddingGemma text/image embeddings, native model lifecycle, and GPU/CPU execution. |
+| SQLite | Durable conversations, tool events, image sources, vector blobs, skills, claims, and provenance. |
+
+## Verified on the Galaxy Z Fold 6
+
+- Qwen generation follows the complete Kotlin → Python → JNI → llama.cpp → Python → Kotlin path, with all 33 Qwen layers offloaded through OpenCL.
+- Qwen has answered questions about actual cat and car pixels via the Qwen multimodal projector.
+- EmbeddingGemma produced normalized 768-dimensional text and image vectors, and semantic retrieval ranked cat, car, and banana images correctly.
+- Image vectors, conversations, assistant answers, knowledge claims, and evidence survived an application restart.
+- Qwen autonomously called `search_images` and `search_memories`; Python validated the payloads, retrieved real local data, and Qwen used those results in its final response.
+
+For metrics, test details, model configuration, and the native implementation, see the [technical guide](docs/TECHNICAL.md).
 
 ## Clone the repository
 
@@ -78,59 +118,13 @@ On first launch:
 
 The app copies selected model files into its private storage; it does not bundle multi-gigabyte weights in the APK.
 
-### ADB diagnostic interface
-
-The debug APK includes a deliberately narrow, JSON-based command surface for rapid iteration without operating the Compose diagnostic controls. It is not a shell: all dispatch remains in the Python backend and only the documented commands are accepted. A request is sent to a debug-only, transparent Activity so long-running local inference is not subject to Android's broadcast receiver timeout. Its result is written to app-private storage:
-
-```bash
-mosaic_debug() {
-  request_b64="$(printf '%s' "$1" | base64 | tr -d '\n')"
-  adb shell am start -n dev.mosaic.poc/.DebugCommandActivity \
-    -a dev.mosaic.poc.DEBUG_COMMAND --es request_b64 "$request_b64"
-  adb exec-out run-as dev.mosaic.poc cat files/mosaic-debug/last-result.json
-}
-
-mosaic_debug '{"operation":"status"}'
-mosaic_debug '{"operation":"agent.chat","title":"Debug chat","message":"Hello"}'
-mosaic_debug '{"operation":"images.search","query":"a photograph of a cat","top_k":3}'
-mosaic_debug '{"operation":"qwen.vision","image_name":"cat.jpg","message":"Describe this image in one sentence."}'
-mosaic_debug '{"operation":"memory.claims"}'
-mosaic_debug '{"operation":"memory.search","query":"What technologies does Mosaic use?"}'
-```
-
-`am start` returns immediately; read the result file after the command completes. Only issue one inference command at a time. The bundled diagnostic images are `cat.jpg`, `car.jpg`, and `banana.jpg`. To supply another image while using the debug build, copy it deliberately into the app-private debug directory, then pass only its filename to `qwen.vision`:
-
-```bash
-adb push ~/Pictures/example.jpg /data/local/tmp/mosaic-example.jpg
-adb shell run-as dev.mosaic.poc mkdir -p files/mosaic-debug/images
-adb shell run-as dev.mosaic.poc cp /data/local/tmp/mosaic-example.jpg files/mosaic-debug/images/example.jpg
-```
-
-For the same debug-only workflow, the Qwen projector belongs at `files/models/selected-qwen35-mmproj-f16.gguf`. Verify downloads before import: the official F16 projector is 672,423,616 bytes with SHA-256 `cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864`.
-
-## What a new contributor should know
+## Architecture at a glance
 
 The Android app is intentionally single-module and compact. Kotlin handles UI, lifecycle, file selection, and native bindings. Python owns message handling, bounded conversation-history preparation, persistence, embedding interfaces, retrieval calculations, and errors. llama.cpp owns actual model loading and inference.
 
-The project uses only one native model slot at a time to keep memory use practical. Loading EmbeddingGemma unloads Qwen and vice versa. Qwen is restored automatically on startup when its imported file is still present.
+The model lifecycle manager keeps the active runtime explicit, restores imported Qwen weights at startup, and coordinates Qwen with EmbeddingGemma for generation and retrieval work.
 
-For component layout, data formats, model settings, testing evidence, and troubleshooting, read the [technical guide](docs/TECHNICAL.md).
-
-## Verification snapshot
-
-The following were run on the physical Fold 6, not mocked:
-
-- Qwen generation through Kotlin → Python → JNI → llama.cpp → Python → Kotlin, with all 33 model layers offloaded through OpenCL.
-- 768-dimensional EmbeddingGemma text and image vectors.
-- Text-to-image retrieval ranked the matching cat, car, and banana photos first for their respective text queries.
-- Saved image embeddings were reloaded from SQLite after an application process restart and produced the expected rankings without regenerating image vectors.
-- Conversations and completed assistant replies persisted through a force-stop/restart; a follow-up response used earlier stored context.
-- Qwen autonomously issued native-parsed `search_images` tool calls for banana and car requests. Python validated the calls, searched the saved EmbeddingGemma vectors, and Qwen generated the final answers after the tool results were added to context.
-- Qwen received real `cat.jpg` and `car.jpg` pixels through libmtmd and the matching Qwen projector. It described a light-colored kitten with blue eyes for the cat and identified the blue BMW car for the car input.
-
-The [technical guide](docs/TECHNICAL.md#verified-results) records the measured diagnostic results and the remaining limitations.
-
-The memory graph was verified on the Fold 6 through the full local path: Qwen emitted a native `search_memories` tool call, Python validated and executed it, EmbeddingGemma searched persisted claim vectors, and Qwen generated a grounded final response. The test completed in 86.45 seconds; this is a diagnostic proof rather than an interactive-latency target.
+For debug commands, component layout, data formats, model settings, test evidence, and troubleshooting, read the [technical guide](docs/TECHNICAL.md).
 
 ## Project map
 
@@ -142,6 +136,6 @@ app/
 docs/                  Implementation and operational documentation
 ```
 
-## Status
+## Join the build
 
-This is an actively evolving Android experiment. Preserve existing app data while testing, keep model files outside Git, and treat the diagnostic UI and benchmark results as proof-of-concept tooling rather than production UX.
+Mosaic is actively evolving as an Android-first, private intelligence workspace. Keep model weights out of Git, preserve local app data while testing, and use the technical guide to reproduce the verified native stack.

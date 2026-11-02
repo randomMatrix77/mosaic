@@ -112,6 +112,21 @@ The debug manifest registers `DebugCommandActivity` only in debug builds. ADB se
 
 `qwen.vision` accepts an app-private image filename, never an arbitrary path. It resolves files exclusively below `files/mosaic-debug/images`, preventing the debug interface from reading unrelated app files. The receiver copies the three retrieval fixtures into this directory on demand.
 
+To invoke a debug command, encode one JSON request and send it to the debug-only Activity. The result is written to app-private storage:
+
+```bash
+mosaic_debug() {
+  request_b64="$(printf '%s' "$1" | base64 | tr -d '\n')"
+  adb shell am start -n dev.mosaic.poc/.DebugCommandActivity \
+    -a dev.mosaic.poc.DEBUG_COMMAND --es request_b64 "$request_b64"
+  adb exec-out run-as dev.mosaic.poc cat files/mosaic-debug/last-result.json
+}
+
+mosaic_debug '{"operation":"status"}'
+mosaic_debug '{"operation":"agent.chat","title":"Debug chat","message":"Hello"}'
+mosaic_debug '{"operation":"images.search","query":"a photograph of a cat","top_k":3}'
+```
+
 ## Native inference
 
 ### Qwen 3.5 4B
@@ -261,7 +276,7 @@ Import both the embedding model and matching projector, then run image retrieval
 
 ### ADB commands and Qwen vision
 
-Use the commands in the top-level README to invoke Python-owned diagnostics without interacting with the Compose screen. For Qwen vision, first copy the official projector into `files/models/selected-qwen35-mmproj-f16.gguf` and supply an image inside `files/mosaic-debug/images`. The receiver creates that image directory and populates the three test images automatically. Only a basename is accepted by Python, so a debug request cannot select arbitrary filesystem paths.
+Use the debug-command procedure above to invoke Python-owned diagnostics without interacting with the Compose screen. For Qwen vision, first copy the official projector into `files/models/selected-qwen35-mmproj-f16.gguf` and supply an image inside `files/mosaic-debug/images`. The receiver creates that image directory and populates the three test images automatically. Only a basename is accepted by Python, so a debug request cannot select arbitrary filesystem paths.
 
 ## Troubleshooting
 
