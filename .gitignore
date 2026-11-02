@@ -6,5 +6,6 @@ app/.gradle/
 __pycache__/
 *.py[cod]
 local.properties
+.env
 models/*.gguf
 app/src/main/cpp/prebuilt/

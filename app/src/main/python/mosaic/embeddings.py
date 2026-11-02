@@ -5,6 +5,9 @@ from time import perf_counter
 from typing import Sequence
 
 
+EMBEDDING_MODEL_IDENTIFIER = "embeddinggemma-2-gguf"
+
+
 class EmbeddingProvider(ABC):
     @abstractmethod
     def load_model(self, model_path: str) -> None:

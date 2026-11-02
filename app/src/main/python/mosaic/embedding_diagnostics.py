@@ -5,11 +5,8 @@ import math
 from pathlib import Path
 from time import perf_counter
 
-from .embeddings import EmbeddingGemmaProvider, cosine_similarity
+from .embeddings import EMBEDDING_MODEL_IDENTIFIER, EmbeddingGemmaProvider, cosine_similarity
 from .storage import get_store
-
-
-EMBEDDING_MODEL_IDENTIFIER = "embeddinggemma-2-gguf"
 
 
 def run_text_checkpoint() -> dict:
